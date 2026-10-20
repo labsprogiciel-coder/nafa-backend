@@ -3,11 +3,8 @@
 // Internal only: callable from this backend's own functions and from the CLI
 // (`npx convex run mizo:catalogue`), never from the app. Each returns the
 // client's MizoResult unchanged.
-//
-// Built with the generic builders so they need no generated code; switch to
-// `internalAction` from "./_generated/server" once `npx convex dev` has run.
-import { internalActionGeneric as internalAction } from "convex/server";
 import { v } from "convex/values";
+import { internalAction } from "./lib/functions";
 import { mizoFromEnv } from "./lib/mizo";
 
 const movement = {
