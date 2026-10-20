@@ -1,5 +1,6 @@
 {
   "extends": "../convex/tsconfig.json",
+  "compilerOptions": { "types": ["node", "vite/client"] },
   "include": ["./**/*", "../convex/**/*"],
   "exclude": ["../convex/_generated"]
 }
