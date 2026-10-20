@@ -55,4 +55,22 @@ pnpm typecheck
 pnpm test
 ```
 
-CI runs both on every pull request.
+## CI/CD
+
+`.github/workflows/ci-cd.yml`:
+
+| When | What |
+|---|---|
+| Every pull request and push to `main` | Typecheck and tests |
+| Pull request, checks green | Deploy the branch to its own Convex preview deployment (`pr-<number>`), reused across pushes |
+| Push to `main`, checks green | Deploy to production, unless a newer `main` commit exists |
+
+**GitHub secrets** (Settings → Secrets and variables → Actions):
+
+- `CONVEX_DEPLOY_KEY`: the production deploy key (`prod:…`), from the production deployment's settings in the Convex dashboard. Without it, merges to `main` fail the deploy step.
+- `CONVEX_PREVIEW_DEPLOY_KEY`: a preview deploy key (`preview:…`), from Project settings → Preview deploy keys. Without it, previews are skipped with a notice.
+
+**Mizo settings per environment.** The Mizo key is not a CI secret; it lives in each Convex deployment:
+
+- Production: `npx convex env set --prod MIZO_SITE_URL …` and `MIZO_API_KEY …`, pointing at **production Mizo**.
+- Previews: set `MIZO_SITE_URL` and `MIZO_API_KEY` as default environment variables for preview deployments (Convex dashboard → Project settings → Environment variables), pointing at a **Mizo dev or preview** partner, never production.
