@@ -8,10 +8,11 @@
 // on the device.
 import { Phone } from "@convex-dev/auth/providers/Phone";
 import { convexAuth } from "@convex-dev/auth/server";
-import { anyApi } from "convex/server";
 import { ConvexError } from "convex/values";
+import type { MutationCtx } from "./lib/functions";
 import { CODE_TTL_MINUTES, codeMessage, generateCode, isAcceptedPhone } from "./lib/phone";
-import { sendText, twilioFromEnv } from "./lib/twilio";
+import { sendCode, twilioFromEnv } from "./lib/twilio";
+import { reserveSend } from "./otp";
 
 export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
   providers: [
@@ -19,31 +20,34 @@ export const { auth, signIn, signOut, store, isAuthenticated } = convexAuth({
       id: "phone",
       maxAge: CODE_TTL_MINUTES * 60,
       generateVerificationToken: async () => generateCode(),
-      async sendVerificationRequest({ identifier: phone, token }, ctx) {
-        await ctx.runMutation(anyApi.otp.reserveSend, { phone });
-        await sendText(twilioFromEnv(), phone, codeMessage(token));
+      // The send limit was already checked in createOrUpdateUser
+      async sendVerificationRequest({ identifier: phone, token }) {
+        await sendCode(twilioFromEnv(), phone, token, codeMessage(token));
       },
     }),
   ],
   callbacks: {
-    // Runs when a code is requested (inside that transaction: refusing here
-    // leaves nothing behind) and again when it is confirmed
+    // Runs inside the transaction that stores a new code, before the
+    // previous one is replaced, and again when a code is confirmed. Refusing
+    // here rolls the whole request back: no row is written, and a code the
+    // saver already received keeps working.
     async createOrUpdateUser(ctx, args) {
-      if (args.existingUserId) {
-        // First confirmed code: the number is the saver's
-        if (args.profile.phoneVerified) {
-          const user = await ctx.db.get(args.existingUserId);
-          if (user && user.phoneVerificationTime === undefined) {
-            await ctx.db.patch(args.existingUserId, { phoneVerificationTime: Date.now() });
-          }
-        }
-        return args.existingUserId;
-      }
       const phone = args.profile.phone;
+      if (args.profile.phoneVerified) {
+        // A code was confirmed: the first time, the number becomes the saver's
+        const user = args.existingUserId ? await ctx.db.get(args.existingUserId) : null;
+        if (!user) throw new ConvexError({ code: "INVALID_PHONE" });
+        if (user.phoneVerificationTime === undefined) {
+          await ctx.db.patch(user._id, { phoneVerificationTime: Date.now() });
+        }
+        return user._id;
+      }
+      // A code is requested
       if (typeof phone !== "string" || !isAcceptedPhone(phone)) {
         throw new ConvexError({ code: "INVALID_PHONE" });
       }
-      return await ctx.db.insert("users", { phone });
+      await reserveSend(ctx as unknown as MutationCtx, phone);
+      return args.existingUserId ?? (await ctx.db.insert("users", { phone }));
     },
   },
 });

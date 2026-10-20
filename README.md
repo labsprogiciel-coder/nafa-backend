@@ -35,7 +35,8 @@ npx @convex-dev/auth                       # sets JWT_PRIVATE_KEY, JWKS and SITE
 npx convex env set TWILIO_ACCOUNT_SID AC…
 npx convex env set TWILIO_AUTH_TOKEN …
 npx convex env set TWILIO_SMS_FROM NAFA    # SMS sender number or ID
-npx convex env set TWILIO_WHATSAPP_FROM +… # optional: WhatsApp first, SMS as fallback
+npx convex env set TWILIO_WHATSAPP_FROM +…          # optional, with the next one: WhatsApp first,
+npx convex env set TWILIO_WHATSAPP_CONTENT_SID HX… #   using an approved template, code as {{1}}
 ```
 
 `SITE_URL` is required by Convex Auth but unused by phone sign-in: any absolute https URL works (the website, once it exists).
@@ -51,8 +52,8 @@ const me = useQuery(api.users.me);                          // { id, phone, mizo
 ```
 
 - **The app formats the number** in E.164 (`+`, country code, national number, digits only). The backend never guesses a country: the stored number is the saver's identity. Only WAEMU country codes are accepted (`ALLOWED_COUNTRY_CODES` in `convex/lib/phone.ts`); anything else fails with `INVALID_PHONE` before a code is sent or a row written.
-- **Codes** are 6 digits, valid 10 minutes, sent by WhatsApp when `TWILIO_WHATSAPP_FROM` is set, else (or when WhatsApp fails) by SMS. Twilio Verify is avoided on purpose: its SMS channel blocked some local prefixes for the TontiPro app.
-- **Limits:** one code per number every 45 seconds and 5 per hour (`TOO_MANY_CODES` with `retryAfterMs`), so nobody can run up the SMS bill. Convex Auth limits wrong codes to 10 per hour per number.
+- **Codes** are 6 digits, valid 10 minutes, sent by SMS. With a WhatsApp sender **and** an approved WhatsApp template configured, WhatsApp goes first: WhatsApp only lets a business start a conversation with a template, so a free-form message would be accepted by Twilio and then fail. After a WhatsApp send the backend checks the message status for a few seconds and falls back to SMS if it failed (for example, a number not on WhatsApp). Twilio Verify is avoided on purpose: its SMS channel blocked some local prefixes for the TontiPro app.
+- **Limits:** one code per number every 45 seconds and 5 per hour (`TOO_MANY_CODES` with `retryAfterMs`), so nobody can run up the SMS bill. A refused request changes nothing: the code the saver already received keeps working. Convex Auth limits wrong codes to 10 per hour per number.
 - The app's 4-digit PIN stays on the device: it unlocks the app and withdrawals and never reaches this server.
 
 ## Try it against Mizo

@@ -122,3 +122,12 @@ test("a second code within the cooldown is refused, and allowed after it", async
   await signIn(t, { phone: PHONE });
   expect(texts).toHaveLength(2);
 });
+
+test("a refused resend keeps the code already sent working", async () => {
+  const t = convexTest(schema, modules);
+  await signIn(t, { phone: PHONE });
+  const first = lastCode();
+  await expect(signIn(t, { phone: PHONE })).rejects.toThrow(/TOO_MANY_CODES/);
+  const result = await signIn(t, { phone: PHONE, code: first });
+  expect(result.tokens?.token).toBeTruthy();
+});
