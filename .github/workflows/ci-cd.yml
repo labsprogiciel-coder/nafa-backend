@@ -1,0 +1,113 @@
+# Nafa backend CI/CD.
+# - Every pull request and push to main: typecheck and tests.
+# - Pull requests: once checks pass, deploy the branch to its own Convex
+#   preview deployment. Never touches production.
+# - Push to main: once checks pass, deploy to production.
+# Secrets: CONVEX_PREVIEW_DEPLOY_KEY (preview), CONVEX_DEPLOY_KEY (production).
+# They are set only on the steps that deploy, never job-wide, so dependency
+# install and build scripts can't read them. The Mizo key is not a CI secret:
+# it lives in each deployment's environment variables (see README).
+name: CI/CD
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+
+  preview:
+    if: github.event_name == 'pull_request'
+    needs: check
+    runs-on: ubuntu-latest
+    concurrency:
+      group: convex-preview-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # No key: fork PRs (no secrets) or previews deliberately disabled.
+      # Preview deploy keys look like preview:<team>:<project>|...
+      - name: Deploy to Convex preview
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_PREVIEW_DEPLOY_KEY }}
+          PREVIEW_NAME: pr-${{ github.event.pull_request.number }}
+        run: |
+          case "$CONVEX_DEPLOY_KEY" in
+            "") echo "::notice::No CONVEX_PREVIEW_DEPLOY_KEY; skipping preview deploy"; exit 0 ;;
+            preview:*) ;;
+            *) echo "::error::CONVEX_PREVIEW_DEPLOY_KEY is not a preview deploy key (it starts with '${CONVEX_DEPLOY_KEY%%:*}:'). Generate one under Convex dashboard > Project settings > Preview deploy keys, or delete the secret to disable previews."; exit 1 ;;
+          esac
+          # --preview-name reuses the PR's deployment across pushes
+          npx convex deploy --preview-name "$PREVIEW_NAME"
+
+  production:
+    if: github.event_name == 'push'
+    needs: check
+    runs-on: ubuntu-latest
+    concurrency:
+      group: convex-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # A re-run of an older workflow must not roll production back
+      - name: Check this is still the latest main commit
+        id: latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          head=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [ "$head" != "$GITHUB_SHA" ]; then
+            echo "::warning::main is now at $head; skipping deploy of older $GITHUB_SHA"
+            echo "stale=true" >> "$GITHUB_OUTPUT"
+          fi
+      # Refuse anything but a production key so main never lands on a dev deployment
+      - name: Deploy to Convex production
+        if: steps.latest.outputs.stale != 'true'
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+        run: |
+          case "$CONVEX_DEPLOY_KEY" in
+            "") echo "::error::CONVEX_DEPLOY_KEY is not set. Add the production deploy key under Settings > Secrets and variables > Actions."; exit 1 ;;
+            prod:*|project:*) ;;
+            *) echo "::error::CONVEX_DEPLOY_KEY must be a production or project deploy key (prod:... or project:...). Get it from the production deployment's settings in the Convex dashboard."; exit 1 ;;
+          esac
+          npx convex deploy
